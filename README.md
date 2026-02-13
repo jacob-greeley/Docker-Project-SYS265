@@ -98,7 +98,7 @@ A production-ready, multi-container monitoring infrastructure using Docker Compo
 ## Project Structure
 
 ```
-prometheus-monitoring-stack/
+Docker-Project-SYS265/
 ├── compose.yaml                    # Main Docker Compose file
 ├── .env.example                    # Environment variable template
 ├── .gitignore
@@ -133,8 +133,13 @@ prometheus-monitoring-stack/
 If you're already familiar with Docker Compose and just want to get running:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/prometheus-monitoring-stack.git
-cd prometheus-monitoring-stack
+# Download the latest release from GitHub
+wget https://github.com/jacob-greeley/Docker-Project-SYS265/releases/latest/download/Prometheus-monitoring-stack.zip
+
+# Unzip into a working directory
+mkdir -p ~/Docker-Project-SYS265 && cd ~/Docker-Project-SYS265
+unzip ~/Prometheus-monitoring-stack.zip
+
 cp .env.example .env           # Edit passwords in .env
 docker compose up -d           # Deploy all services
 docker compose ps              # Verify everything is running
@@ -240,17 +245,20 @@ sudo ufw reload
 
 ---
 
-### Step 2 — Clone the Repository
+### Step 2 — Download the Project
+
+Download the latest release zip from GitHub:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/prometheus-monitoring-stack.git
-cd prometheus-monitoring-stack
+wget https://github.com/jacob-greeley/Docker-Project-SYS265/releases/latest/download/Prometheus-monitoring-stack.zip
+mkdir -p ~/Docker-Project-SYS265 && cd ~/Docker-Project-SYS265
+unzip ~/Prometheus-monitoring-stack.zip
 ```
 
-Or create the directory manually:
+Or create the directory manually if building from scratch:
 
 ```bash
-mkdir -p prometheus-monitoring-stack && cd prometheus-monitoring-stack
+mkdir -p ~/Docker-Project-SYS265 && cd ~/Docker-Project-SYS265
 ```
 
 ---
