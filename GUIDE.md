@@ -151,7 +151,25 @@ sudo usermod -aG docker $USER
 
 > ⚠️ **You MUST log out and log back in** (or run `newgrp docker`) for this change to take effect.
 
-### 1h. Verify the Installation
+### 1h. Configure Docker for cgroup v2 (Ubuntu 22.04+)
+
+Ubuntu 22.04+ uses cgroup v2 by default, which requires Docker to use the host cgroup namespace for monitoring containers like cAdvisor. Create or edit the Docker daemon config:
+
+```bash
+sudo mkdir -p /etc/docker
+
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "default-cgroupns-mode": "host"
+}
+EOF
+
+sudo systemctl restart docker
+```
+
+> ⚠️ This sets the **default** cgroup namespace mode to `host` for all containers. This is safe for lab environments. In production, you may prefer to set this per-container only.
+
+### 1i. Verify the Installation
 
 Confirm Docker and Compose are installed correctly:
 
@@ -294,7 +312,7 @@ Press `Esc`, type `:wq`, and press `Enter`.
 
 ## Step 5 — Create the Docker Compose File
 
-This is the main orchestration file. It defines all 8 services, 3 networks, and 4 persistent volumes.
+This is the main orchestration file. It defines all 9 services (including the Nginx Exporter), 3 networks, and 4 persistent volumes.
 
 ### 5a. Create the File
 
@@ -413,7 +431,7 @@ services:
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
-    cgroupns: host
+    cgroup: host
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -435,13 +453,27 @@ services:
     container_name: mysql-exporter
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: "exporter:${MYSQL_EXPORTER_PASSWORD:-exporterpass}@(mysql:3306)/"
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:-exporterpass}
+    command:
+      - "--mysqld.username=exporter"
+      - "--mysqld.address=mysql:3306"
     networks:
       - monitoring
       - backend
     depends_on:
       mysql:
         condition: service_healthy
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.0
+    container_name: nginx-exporter
+    restart: unless-stopped
+    command:
+      - "--nginx.scrape-uri=http://nginx:80/stub_status"
+    networks:
+      - monitoring
+    depends_on:
+      - nginx
 
   # ---------------------------------------------------------------------------
   # APPLICATION SERVICES (Web + Database)
@@ -517,7 +549,8 @@ Press `Esc`, type `:wq`, and press `Enter`.
 ### Key Things to Know About This File
 
 - **No `version` key** — The `version: '3.8'` property is obsolete in Docker Compose V2+. Omitting it avoids deprecation warnings.
-- **`cgroupns: host` on cAdvisor** — Required for Ubuntu 22.04+ which uses cgroup v2 by default. Without this, cAdvisor fails with "mountpoint for cpu not found".
+- **`cgroup: host` on cAdvisor** — Required for Ubuntu 22.04+ which uses cgroup v2 by default. Without this, cAdvisor fails with "mountpoint for cpu not found".
+- **Nginx Exporter** — Nginx does not natively expose Prometheus metrics. The `nginx-exporter` container scrapes Nginx's `stub_status` endpoint and re-exposes the data as Prometheus metrics on port 9113. Prometheus scrapes the exporter, not Nginx directly.
 - **Health checks** — Prometheus, Grafana, Nginx, and MySQL have health checks. Dependent services (like Grafana depending on Prometheus) wait until the dependency is healthy before starting.
 - **`:ro` mounts** — Configuration files are mounted read-only to prevent containers from modifying your host files.
 - **Named volumes** — Data for Prometheus, Grafana, MySQL, and Alertmanager persists across container restarts. Data is only deleted if you explicitly run `docker compose down -v`.
@@ -579,10 +612,16 @@ scrape_configs:
 
   - job_name: "nginx"
     static_configs:
-      - targets: ["nginx:80"]
+      - targets: ["nginx-exporter:9113"]
         labels:
           instance: "nginx-web"
-    metrics_path: /stub_status
+
+  - job_name: "windows"
+    static_configs:
+      - targets: ["10.0.5.5:9182"]
+        labels:
+          instance: "ad01-jacob"
+          os: "windows"
 ```
 
 ### 6c. Save and Exit
@@ -592,7 +631,9 @@ Press `Esc`, type `:wq`, and press `Enter`.
 ### How This Works
 
 - **`scrape_interval: 15s`** — Prometheus pulls metrics from every target every 15 seconds.
-- **`scrape_configs`** — Each entry defines a monitoring target. Targets use **container names** as hostnames (like `node-exporter:9100`) because they share the Docker `monitoring-net` network.
+- **`scrape_configs`** — Each entry defines a monitoring target. Internal targets use **container names** as hostnames (like `node-exporter:9100`) because they share the Docker `monitoring-net` network. External targets use IP addresses (like `10.0.5.5:9182` for ad01-jacob).
+- **Nginx metrics** — Prometheus scrapes `nginx-exporter:9113`, not Nginx directly. The Nginx Exporter container translates Nginx's `stub_status` page into Prometheus metrics format.
+- **Windows target** — The `windows` job scrapes `windows_exporter` running on ad01-jacob. This requires `windows_exporter` to be installed on the Windows server and port 9182 to be open in its firewall.
 - **`rule_files`** — Points to the alert rules file we create in the next step.
 
 > ✅ To add more servers later, just add new entries under `scrape_configs` and reload: `curl -X POST http://localhost:9090/-/reload`
@@ -1029,6 +1070,7 @@ The `-d` flag runs containers in detached (background) mode. Expected output:
  ✔ Container cadvisor        Started
  ✔ Container alertmanager    Started
  ✔ Container mysql-exporter  Started
+ ✔ Container nginx-exporter  Started
  ✔ Container grafana         Started
  ✔ Container nginx-web       Started
 ```
@@ -1055,15 +1097,16 @@ docker compose ps
 Expected output (all should show `Up` or `Up (healthy)`):
 
 ```
-NAME              IMAGE                              STATUS                   PORTS
-alertmanager      prom/alertmanager:v0.27.0          Up (healthy)             0.0.0.0:9093->9093/tcp
-cadvisor          gcr.io/cadvisor/cadvisor:v0.49.1   Up                       8080/tcp
-grafana           grafana/grafana:11.4.0             Up (healthy)             0.0.0.0:3000->3000/tcp
-mysql-db          mysql:8.0                          Up (healthy)             3306/tcp
-mysql-exporter    prom/mysqld-exporter:v0.16.0       Up                       9104/tcp
-nginx-web         nginx:1.27-alpine                  Up (healthy)             0.0.0.0:8080->80/tcp
-node-exporter     prom/node-exporter:v1.8.2          Up                       9100/tcp
-prometheus        prom/prometheus:v2.53.5             Up (healthy)             0.0.0.0:9090->9090/tcp
+NAME              IMAGE                                    STATUS                   PORTS
+alertmanager      prom/alertmanager:v0.27.0                Up (healthy)             0.0.0.0:9093->9093/tcp
+cadvisor          gcr.io/cadvisor/cadvisor:v0.49.1         Up                       8080/tcp
+grafana           grafana/grafana:11.4.0                   Up (healthy)             0.0.0.0:3000->3000/tcp
+mysql-db          mysql:8.0                                Up (healthy)             3306/tcp
+mysql-exporter    prom/mysqld-exporter:v0.16.0             Up                       9104/tcp
+nginx-exporter    nginx/nginx-prometheus-exporter:1.4.0    Up                       9113/tcp
+nginx-web         nginx:1.27-alpine                        Up (healthy)             0.0.0.0:8080->80/tcp
+node-exporter     prom/node-exporter:v1.8.2                Up                       9100/tcp
+prometheus        prom/prometheus:v2.53.5                   Up (healthy)             0.0.0.0:9090->9090/tcp
 ```
 
 ### 13b. Verify Prometheus Is Scraping Targets
@@ -1078,7 +1121,9 @@ All targets should show `"health": "up"`. You can also check this visually in th
 http://localhost:9090/targets
 ```
 
-All 5 targets should have a green **UP** badge.
+All 6 targets should have a green **UP** badge.
+
+> **Note:** The `windows` target (`10.0.5.5:9182`) will only show UP if `windows_exporter` is running on ad01-jacob and the firewall allows traffic on port 9182 from the Docker host.
 
 ### 13c. Check Logs if Anything Looks Wrong
 
@@ -1154,6 +1199,7 @@ Grafana has thousands of free community dashboards. Here are the best ones for t
 | Docker Container Monitoring | `893` | Per-container resource usage |
 | MySQL Overview | `7362` | MySQL performance, queries, connections |
 | Prometheus Stats | `3662` | Prometheus self-monitoring |
+| Windows Exporter | `14694` | Windows server metrics (CPU, memory, disk, network) |
 
 **To import a dashboard:**
 
@@ -1354,7 +1400,7 @@ Common causes:
 
 ### Problem: cAdvisor fails to start or shows "mountpoint for cpu not found"
 
-This is a cgroup v2 issue on Ubuntu 22.04+. The `compose.yaml` already includes the fix (`cgroupns: host` + `/sys/fs/cgroup` mount), but if you still see errors:
+This is a cgroup v2 issue on Ubuntu 22.04+. The `compose.yaml` already includes the fix (`cgroup: host` + `/sys/fs/cgroup` mount), but if you still see errors:
 
 ```bash
 # Verify cgroup v2
