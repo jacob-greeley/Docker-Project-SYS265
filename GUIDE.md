@@ -8,11 +8,17 @@ A detailed, step-by-step walkthrough for deploying the full Prometheus monitorin
 
 ## Two Ways to Use This Guide
 
-**The fast way (recommended):** All configuration files are already in this repository. Clone the repo, edit `.env`, and deploy:
+**The fast way (recommended):** All configuration files are packaged in the release zip on this repository. Download and deploy:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/prometheus-monitoring-stack.git
-cd prometheus-monitoring-stack
+# Download the latest release zip from GitHub
+wget https://github.com/jacob-greeley/Docker-Project-SYS265/releases/latest/download/Prometheus-monitoring-stack.zip
+
+# Unzip and enter the directory
+mkdir -p ~/Docker-Project-SYS265 && cd ~/Docker-Project-SYS265
+unzip ~/Prometheus-monitoring-stack.zip
+
+# Configure and deploy
 cp .env.example .env
 vim .env                   # Set your passwords
 docker compose up -d
@@ -208,8 +214,8 @@ You should see entries for ports 3000, 8080, 9090, and 9093 in the output.
 ### 3a. Create the Root Directory
 
 ```bash
-mkdir -p ~/prometheus-monitoring-stack
-cd ~/prometheus-monitoring-stack
+mkdir -p ~/Docker-Project-SYS265
+cd ~/Docker-Project-SYS265
 ```
 
 ### 3b. Create All Subdirectories
@@ -829,12 +835,9 @@ Save and exit — press `Esc`, type `:wq`, press `Enter`.
 This is a pre-built dashboard with CPU, memory, disk, network, and target status panels. Because the JSON is long, the easiest method is to download it directly from the project:
 
 ```bash
-# If you cloned the repo or unzipped the project:
-# The file is already at grafana/dashboards/node-overview.json
+# If you downloaded the release zip, the file is already at grafana/dashboards/node-overview.json
 
-# If building manually, download it:
-curl -o grafana/dashboards/node-overview.json \
-  https://raw.githubusercontent.com/YOUR_USERNAME/prometheus-monitoring-stack/main/grafana/dashboards/node-overview.json
+# If building manually, copy it from the release zip or create it per the README
 ```
 
 > ✅ Alternatively, copy the `node-overview.json` file from the project zip into `grafana/dashboards/`.
@@ -989,7 +992,7 @@ Everything is configured. Time to pull the images and start all services.
 ### 12a. Make Sure You Are in the Project Directory
 
 ```bash
-cd ~/prometheus-monitoring-stack
+cd ~/Docker-Project-SYS265
 ls -la
 ```
 
@@ -1165,7 +1168,7 @@ Grafana has thousands of free community dashboards. Here are the best ones for t
 
 ## Day-to-Day Commands Reference
 
-Run these from the `~/prometheus-monitoring-stack` directory.
+Run these from the `~/Docker-Project-SYS265` directory.
 
 ### Starting and Stopping
 
