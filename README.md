@@ -1,6 +1,6 @@
 # Prometheus Monitoring Stack
 
-A production-ready, multi-container monitoring infrastructure using Docker Compose on **Ubuntu**. This project deploys **Prometheus**, **Grafana**, **Alertmanager**, **Node Exporter**, **cAdvisor**, **Nginx** (web), **MySQL** (database), and a **MySQL Exporter** — all wired together with customized networking, persistent volumes, health checks, and auto-provisioned dashboards.
+A production-ready, multi-container monitoring infrastructure using Docker Compose on **Ubuntu**. This project deploys **Prometheus**, **Grafana**, **Alertmanager**, **Node Exporter**, **cAdvisor**, **Nginx** (web), **Nginx Exporter**, **MySQL** (database), and a **MySQL Exporter** — all wired together with customized networking, persistent volumes, health checks, and auto-provisioned dashboards. It also monitors external servers such as Windows machines running `windows_exporter`.
 
 > Built for network monitoring in lab environments on Ubuntu 22.04/24.04 LTS (tested on `jacob.local` domain). Includes cgroup v2 compatibility out of the box.
 
@@ -49,23 +49,35 @@ A production-ready, multi-container monitoring infrastructure using Docker Compo
 │  │              │       │      ┌──────────────┐                │
 │  │              │       ├──────│MySQL Exporter │                │
 │  │              │       │      │  :9104        │                │
+│  │              │       │      └──────┬───────┘                │
+│  │              │       │             │                         │
+│  │              │       │      ┌──────────────┐                │
+│  │              │       ├──────│Nginx Exporter │                │
+│  │              │       │      │  :9113        │                │
 │  └──────┬───────┘       │      └──────┬───────┘                │
 │         │               │             │                         │
-│         │ alerts        │             │ queries                  │
+│         │ alerts        │             │ stub_status             │
 │         ▼               │             ▼                         │
 │  ┌──────────────┐       │      ┌──────────────┐                │
-│  │ Alertmanager │       │      │    MySQL      │                │
-│  │  :9093        │       │      │  (database)  │                │
+│  │ Alertmanager │       │      │    Nginx      │                │
+│  │  :9093        │       │      │  :8080 (web)  │                │
 │  └──────────────┘       │      └──────────────┘                │
 │         │               │                                       │
 │         │               │      ┌──────────────┐                │
-│         │               └──────│    Nginx      │                │
-│         ▼                      │  :8080 (web)  │                │
+│         │               └──────│    MySQL      │                │
+│         ▼                      │  (database)   │                │
 │  ┌──────────────┐              └──────────────┘                │
 │  │   Grafana    │                                               │
 │  │  :3000       │                                               │
 │  │ (dashboards) │                                               │
 │  └──────────────┘                                               │
+│                                                                 │
+│  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐  │
+│    External Targets (scraped over the network)               │  │
+│  │                                                           │  │
+│    Prometheus ◄──── 10.0.5.5:9182 (ad01-jacob, Windows)     │  │
+│  │                                                           │  │
+│  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +103,7 @@ A production-ready, multi-container monitoring infrastructure using Docker Compo
 
 > **Note:** This project uses `docker compose` (Compose V2, no hyphen). The legacy `docker-compose` (V1, Python-based) was deprecated in June 2023. Docker Engine on Ubuntu bundles Compose V2 automatically when installed from the official Docker repository.
 
-> **Ubuntu-specific:** Ubuntu 22.04+ defaults to **cgroup v2**. This project's `compose.yaml` already accounts for this with `cgroupns: host` on the cAdvisor container and the required `/sys/fs/cgroup` mount. No manual cgroup configuration is needed.
+> **Ubuntu-specific:** Ubuntu 22.04+ defaults to **cgroup v2**. This project's `compose.yaml` already accounts for this with `cgroup: host` on the cAdvisor container and the required `/sys/fs/cgroup` mount. No manual cgroup configuration is needed.
 
 ---
 
@@ -103,6 +115,7 @@ Docker-Project-SYS265/
 ├── .env.example                    # Environment variable template
 ├── .gitignore
 ├── README.md
+├── GUIDE.md                        # Complete step-by-step deployment guide
 ├── prometheus/
 │   ├── prometheus.yml              # Prometheus scrape configuration
 │   └── alert_rules.yml             # Alerting rules (PromQL expressions)
@@ -160,7 +173,6 @@ Docker Compose V2 is bundled with Docker Engine. Install Docker using the offici
 **Remove any conflicting packages first:**
 
 ```bash
-# Remove old or conflicting Docker packages
 sudo apt remove docker docker-engine docker.io containerd runc docker-compose 2>/dev/null
 ```
 
@@ -174,14 +186,11 @@ sudo apt install -y ca-certificates curl
 **Add Docker's official GPG key and repository:**
 
 ```bash
-# Create the keyrings directory
 sudo install -m 0755 -d /etc/apt/keyrings
 
-# Download Docker's GPG key
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# Add the Docker repository (DEB822 format — current official method)
 sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
@@ -214,6 +223,20 @@ sudo usermod -aG docker $USER
 
 > **You must log out and back in** (or run `newgrp docker`) for the group change to take effect.
 
+**Configure Docker for cgroup v2 (required on Ubuntu 22.04+):**
+
+```bash
+sudo mkdir -p /etc/docker
+
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "default-cgroupns-mode": "host"
+}
+EOF
+
+sudo systemctl restart docker
+```
+
 **Verify installation:**
 
 ```bash
@@ -223,7 +246,6 @@ docker --version
 docker compose version
 # Expected: Docker Compose version v2.30.x or higher
 
-# Quick smoke test
 docker run --rm hello-world
 ```
 
@@ -232,7 +254,6 @@ docker run --rm hello-world
 **Open required firewall ports (if UFW is enabled):**
 
 ```bash
-# Check if UFW is active
 sudo ufw status
 
 # If active, allow the monitoring stack ports
@@ -295,7 +316,7 @@ MYSQL_EXPORTER_PASSWORD=exporterpass # ← CHANGE THIS
 
 #### 4a. Prometheus Scrape Config (`prometheus/prometheus.yml`)
 
-This file tells Prometheus what to monitor. By default it scrapes itself, Node Exporter, cAdvisor, MySQL Exporter, and Nginx.
+This file tells Prometheus what to monitor. By default it scrapes itself, Node Exporter, cAdvisor, MySQL Exporter, Nginx (via the Nginx Exporter), and ad01-jacob (Windows Server via `windows_exporter`).
 
 Key settings:
 
@@ -305,13 +326,17 @@ global:
   evaluation_interval: 15s   # How frequently to evaluate alert rules
 ```
 
-Each `scrape_configs` entry defines a target. Targets use **container names** as hostnames because they share the `monitoring-net` Docker network:
+Each `scrape_configs` entry defines a target. Internal targets use **container names** as hostnames because they share the `monitoring-net` Docker network. External targets use IP addresses:
 
 ```yaml
 scrape_configs:
   - job_name: "node-exporter"
     static_configs:
-      - targets: ["node-exporter:9100"]
+      - targets: ["node-exporter:9100"]       # Internal (Docker container)
+
+  - job_name: "windows"
+    static_configs:
+      - targets: ["10.0.5.5:9182"]            # External (ad01-jacob)
 ```
 
 #### 4b. Alert Rules (`prometheus/alert_rules.yml`)
@@ -331,31 +356,29 @@ The `grafana/provisioning/` directory auto-configures Grafana on first boot so t
 ### Step 5 — Deploy the Stack
 
 ```bash
-# Pull all images first (optional, shows download progress cleanly)
 docker compose pull
-
-# Start all services in detached mode
 docker compose up -d
 ```
 
 Expected output:
 
 ```
-[+] Running 9/9
- ✔ Network monitoring-net   Created
- ✔ Network frontend-net     Created
- ✔ Network backend-net      Created
- ✔ Volume "prometheus-data" Created
- ✔ Volume "grafana-data"    Created
- ✔ Volume "mysql-data"      Created
- ✔ Container prometheus     Started
- ✔ Container mysql-db       Started
- ✔ Container node-exporter  Started
- ✔ Container cadvisor       Started
- ✔ Container alertmanager   Started
- ✔ Container mysql-exporter Started
- ✔ Container grafana        Started
- ✔ Container nginx-web      Started
+[+] Running 12/12
+ ✔ Network monitoring-net    Created
+ ✔ Network frontend-net      Created
+ ✔ Network backend-net       Created
+ ✔ Volume "prometheus-data"  Created
+ ✔ Volume "grafana-data"     Created
+ ✔ Volume "mysql-data"       Created
+ ✔ Container prometheus      Started
+ ✔ Container mysql-db        Started
+ ✔ Container node-exporter   Started
+ ✔ Container cadvisor        Started
+ ✔ Container alertmanager    Started
+ ✔ Container mysql-exporter  Started
+ ✔ Container nginx-exporter  Started
+ ✔ Container grafana         Started
+ ✔ Container nginx-web       Started
 ```
 
 ---
@@ -363,32 +386,33 @@ Expected output:
 ### Step 6 — Verify All Services
 
 ```bash
-# Check container status (all should show "Up" or "Up (healthy)")
 docker compose ps
 ```
 
 Expected output:
 
 ```
-NAME              IMAGE                           STATUS                   PORTS
-alertmanager      prom/alertmanager:v0.27.0       Up (healthy)             0.0.0.0:9093->9093/tcp
-cadvisor          gcr.io/cadvisor/cadvisor:v0.49.1 Up                      8080/tcp
-grafana           grafana/grafana:11.4.0          Up (healthy)             0.0.0.0:3000->3000/tcp
-mysql-db          mysql:8.0                       Up (healthy)             3306/tcp
-mysql-exporter    prom/mysqld-exporter:v0.16.0    Up                       9104/tcp
-nginx-web         nginx:1.27-alpine               Up (healthy)             0.0.0.0:8080->80/tcp
-node-exporter     prom/node-exporter:v1.8.2       Up                       9100/tcp
-prometheus        prom/prometheus:v2.53.5          Up (healthy)             0.0.0.0:9090->9090/tcp
+NAME              IMAGE                                    STATUS                   PORTS
+alertmanager      prom/alertmanager:v0.27.0                Up (healthy)             0.0.0.0:9093->9093/tcp
+cadvisor          gcr.io/cadvisor/cadvisor:v0.49.1         Up                       8080/tcp
+grafana           grafana/grafana:11.4.0                   Up (healthy)             0.0.0.0:3000->3000/tcp
+mysql-db          mysql:8.0                                Up (healthy)             3306/tcp
+mysql-exporter    prom/mysqld-exporter:v0.16.0             Up                       9104/tcp
+nginx-exporter    nginx/nginx-prometheus-exporter:1.4.0    Up                       9113/tcp
+nginx-web         nginx:1.27-alpine                        Up (healthy)             0.0.0.0:8080->80/tcp
+node-exporter     prom/node-exporter:v1.8.2                Up                       9100/tcp
+prometheus        prom/prometheus:v2.53.5                   Up (healthy)             0.0.0.0:9090->9090/tcp
 ```
 
 **Verify Prometheus targets are being scraped:**
 
 ```bash
-# Check Prometheus targets API
 curl -s http://localhost:9090/api/v1/targets | python3 -m json.tool | head -30
 ```
 
 Or open [http://localhost:9090/targets](http://localhost:9090/targets) in a browser — all targets should show **UP** (green).
+
+> **Note:** The `windows` target (`10.0.5.5:9182`) will only show UP if `windows_exporter` is running on ad01-jacob and the firewall allows traffic on port 9182 from the Docker host.
 
 **Check logs if any container is unhealthy:**
 
@@ -427,8 +451,15 @@ docker compose logs --tail=50     # Last 50 lines from all services
 | `node-exporter` | `prom/node-exporter:v1.8.2` | Exports host-level metrics (CPU, memory, disk, network) | 9100 (internal) |
 | `cadvisor` | `gcr.io/cadvisor/cadvisor:v0.49.1` | Exports per-container resource metrics | 8080 (internal) |
 | `mysql-exporter` | `prom/mysqld-exporter:v0.16.0` | Exports MySQL server metrics | 9104 (internal) |
+| `nginx-exporter` | `nginx/nginx-prometheus-exporter:1.4.0` | Exports Nginx connection metrics via `stub_status` | 9113 (internal) |
 | `nginx` | `nginx:1.27-alpine` | Web server with `stub_status` metrics endpoint | 8080 |
 | `mysql` | `mysql:8.0` | Relational database | 3306 (internal) |
+
+**External Targets:**
+
+| Host | Address | Exporter | Purpose |
+|---|---|---|---|
+| `ad01-jacob` | `10.0.5.5:9182` | `windows_exporter` | Windows Server Core (Active Directory) |
 
 ---
 
@@ -438,17 +469,17 @@ docker compose logs --tail=50     # Last 50 lines from all services
 
 To monitor additional hosts or services on your network, add entries to `prometheus/prometheus.yml`:
 
-**Example — monitor a Windows server running `windows_exporter`:**
+**Example — monitor another Windows server running `windows_exporter`:**
 
 ```yaml
 scrape_configs:
   # ... existing jobs ...
 
-  - job_name: "windows-server"
+  - job_name: "windows-web01"
     static_configs:
-      - targets: ["192.168.1.50:9182"]
+      - targets: ["10.0.5.100:9182"]
         labels:
-          instance: "win-dc01"
+          instance: "web01-jacob"
           os: "windows"
 ```
 
@@ -457,7 +488,7 @@ scrape_configs:
 ```yaml
   - job_name: "remote-linux"
     static_configs:
-      - targets: ["192.168.1.60:9100"]
+      - targets: ["10.0.5.60:9100"]
         labels:
           instance: "web-server-01"
 ```
@@ -511,6 +542,7 @@ Grafana has thousands of community dashboards at [https://grafana.com/grafana/da
 | Docker Container Monitoring | `893` | Per-container resource usage |
 | MySQL Overview | `7362` | MySQL performance and queries |
 | Prometheus Stats | `3662` | Prometheus self-monitoring |
+| Windows Exporter | `14694` | Windows server metrics (CPU, memory, disk, network) |
 
 **To import via the Grafana UI:**
 
@@ -534,13 +566,15 @@ Key design decisions in the `compose.yaml`:
 
 **No `version` key:** The top-level `version` property (e.g., `version: '3.8'`) is obsolete in Docker Compose V2+ and triggers a warning. Modern Compose automatically uses the latest schema. This project omits it intentionally.
 
-**Ubuntu cgroup v2 compatibility:** Ubuntu 22.04+ defaults to cgroup v2 (unified hierarchy), which can cause issues with container metric collectors. The cAdvisor service includes `cgroupns: host` and mounts `/sys/fs/cgroup:ro` to ensure it can read cgroup data correctly under the v2 hierarchy. The `--docker_only=true` flag limits cAdvisor to Docker containers only, and `--disable_metrics` disables metric collectors known to be problematic on cgroup v2.
+**Ubuntu cgroup v2 compatibility:** Ubuntu 22.04+ defaults to cgroup v2 (unified hierarchy), which can cause issues with container metric collectors. The cAdvisor service includes `cgroup: host` and mounts `/sys/fs/cgroup:ro` to ensure it can read cgroup data correctly under the v2 hierarchy. The `--docker_only=true` flag limits cAdvisor to Docker containers only, and `--disable_metrics` disables metric collectors known to be problematic on cgroup v2.
 
 **Named volumes for persistence:** All stateful services (Prometheus, Grafana, MySQL, Alertmanager) use named Docker volumes. Data survives container restarts, image upgrades, and `docker compose down`. To destroy data, you must explicitly pass the `-v` flag.
 
 **Three isolated networks:** Services are segmented into `monitoring-net`, `backend-net`, and `frontend-net`. MySQL is not exposed to the monitoring network directly — only through the exporter. Nginx sits on both the monitoring and frontend networks.
 
 **Health checks on critical services:** Prometheus, Grafana, Nginx, and MySQL have health checks defined. Dependent services (like `grafana` depending on `prometheus`) use `condition: service_healthy` to ensure proper startup order.
+
+**Nginx Exporter:** Nginx does not natively expose Prometheus metrics. The `nginx-exporter` container scrapes Nginx's `stub_status` endpoint (`http://nginx:80/stub_status`) and re-exposes the data as Prometheus metrics on port 9113. Prometheus scrapes the exporter, not Nginx directly.
 
 **Read-only volume mounts (`:ro`):** Configuration files are mounted read-only to prevent containers from modifying the host files.
 
@@ -606,6 +640,14 @@ docker compose logs <service-name>
 docker compose exec prometheus wget -qO- http://node-exporter:9100/metrics | head
 ```
 
+For external targets (like ad01-jacob), verify connectivity from the Docker host:
+
+```bash
+curl -s http://10.0.5.5:9182/metrics | head
+```
+
+If this fails, check that `windows_exporter` is running on the target and that the firewall allows inbound TCP 9182.
+
 **Problem: Grafana shows "No Data" on dashboards**
 
 Possible causes and fixes:
@@ -623,17 +665,14 @@ Common causes: incorrect password in `.env`, port 3306 already in use on the hos
 
 **Problem: cAdvisor fails to start or shows "mountpoint for cpu not found"**
 
-This is a cgroup v2 issue common on Ubuntu 22.04+. The `compose.yaml` already includes the fix (`cgroupns: host` + `/sys/fs/cgroup` mount), but if you still see errors:
+This is a cgroup v2 issue common on Ubuntu 22.04+. The `compose.yaml` already includes the fix (`cgroup: host` + `/sys/fs/cgroup` mount), but if you still see errors:
 
 ```bash
-# Verify your system uses cgroup v2
 mount | grep cgroup
 # Expected: cgroup2 on /sys/fs/cgroup type cgroup2
 
-# Check cAdvisor logs for specific errors
 docker compose logs cadvisor
 
-# Ensure /dev/kmsg is accessible
 sudo chmod 644 /dev/kmsg
 ```
 
@@ -642,7 +681,6 @@ If cAdvisor continues to fail, you can safely comment it out in `compose.yaml` �
 **Problem: Permission denied on Grafana data**
 
 ```bash
-# Fix ownership for the Grafana named volume
 docker compose exec -u root grafana chown -R grafana:grafana /var/lib/grafana
 docker compose restart grafana
 ```
@@ -657,10 +695,9 @@ This stack is designed for lab and internal network use. For production environm
 2. **Do not expose ports to the public internet** — use a reverse proxy (Traefik, Nginx) with TLS
 3. **Configure UFW firewall rules** — Ubuntu ships with UFW; restrict access to monitoring ports to your local network only:
    ```bash
-   # Allow only your lab subnet (example: 192.168.1.0/24)
-   sudo ufw allow from 192.168.1.0/24 to any port 3000 proto tcp comment "Grafana - LAN only"
-   sudo ufw allow from 192.168.1.0/24 to any port 9090 proto tcp comment "Prometheus - LAN only"
-   sudo ufw allow from 192.168.1.0/24 to any port 9093 proto tcp comment "Alertmanager - LAN only"
+   sudo ufw allow from 10.0.5.0/24 to any port 3000 proto tcp comment "Grafana - LAN only"
+   sudo ufw allow from 10.0.5.0/24 to any port 9090 proto tcp comment "Prometheus - LAN only"
+   sudo ufw allow from 10.0.5.0/24 to any port 9093 proto tcp comment "Alertmanager - LAN only"
    sudo ufw deny 3000/tcp
    sudo ufw deny 9090/tcp
    sudo ufw deny 9093/tcp
