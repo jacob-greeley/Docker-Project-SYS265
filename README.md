@@ -710,7 +710,7 @@ This stack is designed for lab and internal network use. For production environm
 9. **Docker and UFW caveat** — Docker manipulates iptables directly and can bypass UFW rules for published ports. For strict network control, consider using `ports: "127.0.0.1:9090:9090"` syntax to bind services to localhost only, then access them through an authenticated reverse proxy
 
 ---
-
+**Important:** This Was made with the help of Claude AI
 ## License
 
 This project is provided as-is for educational and lab use. All Docker images are subject to their respective licenses (Apache 2.0 for Prometheus components, AGPL for Grafana).
