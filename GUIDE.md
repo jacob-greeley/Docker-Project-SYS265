@@ -1447,3 +1447,5 @@ sudo ufw status
 ```
 
 Use `http://YOUR-SERVER-IP:3000` instead of `http://localhost:3000` when accessing from another machine.
+
+**Important:** This Project Was made with the help of Claude AI as a Tool
